@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>灰度发布演练台 · 可断控恢复</title>
+<style>
+  :root {
+    --bg: #0f141b; --panel: #171e28; --panel2: #1d2632; --line: #2a3645;
+    --text: #dce4ee; --muted: #8595a8; --accent: #4f9cf9; --ok: #35c28a;
+    --warn: #f0a94f; --bad: #ef6b6b; --v1: #4f9cf9; --v2: #8f7cf6;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: var(--panel); }
+  header h1 { font-size: 17px; margin: 0; }
+  .wrap { padding: 20px 24px 48px; max-width: 1280px; margin: 0 auto; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card h2 { font-size: 13px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .08em; margin: 0 0 12px; font-weight: 600; }
+  .col-4 { grid-column: span 4; } .col-6 { grid-column: span 6; }
+  .col-8 { grid-column: span 8; } .col-12 { grid-column: span 12; }
+  @media (max-width: 980px) { .col-4,.col-6,.col-8 { grid-column: span 12; } }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px;
+    border: 1px solid var(--line); background: var(--panel2); }
+  .badge.alive { color: var(--ok); border-color: var(--ok); }
+  .badge.dead { color: var(--bad); border-color: var(--bad); }
+  .badge.phase { color: var(--accent); border-color: var(--accent); }
+  .badge.skipped { color: var(--warn); border-color: var(--warn); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.bad { color: var(--bad); border-color: var(--bad); }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #08111f; font-weight: 600; }
+  button.ok-btn { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  button.warn { border-color: var(--warn); color: var(--warn); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .steps { display: flex; gap: 6px; flex-wrap: wrap; }
+  .step { padding: 4px 10px; border-radius: 8px; background: var(--panel2);
+    border: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .step.active { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .step.done { color: var(--ok); border-color: var(--ok); }
+  .bar { height: 26px; border-radius: 8px; overflow: hidden; display: flex;
+    border: 1px solid var(--line); font-size: 12px; font-weight: 600; }
+  .bar .v1 { background: var(--v1); color: #08111f; display: flex; align-items: center;
+    justify-content: center; min-width: 0; }
+  .bar .v2 { background: var(--v2); color: #08111f; display: flex; align-items: center;
+    justify-content: center; min-width: 0; }
+  .inst { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--panel2); }
+  .inst.terminated { opacity: .45; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .dot.green { background: var(--ok); } .dot.red { background: var(--bad); } .dot.gray { background: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line);
+    vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .timeline { max-height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .ev { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel2); }
+  .ev .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+  .ev .etype { font-family: var(--mono); color: var(--accent); font-size: 12px; font-weight: 600; }
+  .ev details { margin-top: 6px; }
+  .ev summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  pre { background: #0c1117; border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px; overflow-x: auto; font-family: var(--mono); font-size: 11.5px; margin: 6px 0 0; }
+  .scenario-log { max-height: 260px; overflow-y: auto; font-size: 12.5px; }
+  .scenario-log .line { padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .lvl-INFO { color: var(--text); } .lvl-WARN { color: var(--warn); }
+  .lvl-OK { color: var(--ok); } .lvl-ERROR { color: var(--bad); }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  #toast { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 99; }
+  .toast { padding: 10px 16px; border-radius: 8px; background: var(--panel2);
+    border: 1px solid var(--accent); max-width: 420px; }
+  .toast.err { border-color: var(--bad); color: var(--bad); }
+  .traffic-row { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); }
+  .traffic-row b { font-size: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>灰度发布演练台 <span class="muted" style="font-weight:400">/ 路由 · 实例版本 · 配置 一次灰度联动，控制面可中断恢复</span></h1>
+  <span id="ctrl-badge" class="badge">控制器状态未知</span>
+  <span id="phase-badge" class="badge phase">阶段 IDLE</span>
+  <span id="rel-badge" class="badge">无发布单</span>
+  <span class="muted mono" id="clock"></span>
+</header>
+
+<div class="wrap">
+<div class="grid">
+
+  <!-- 进程与演练控制 -->
+  <section class="card col-4">
+    <h2>控制面进程</h2>
+    <div class="kv" id="ctrl-kv"><div class="k">状态</div><div>加载中…</div></div>
+    <div class="btns" style="margin-top:12px">
+      <button class="primary" onclick="post('/api/control/start')">启动控制器</button>
+      <button class="warn" onclick="post('/api/control/stop')">优雅停止</button>
+      <button class="danger" onclick="post('/api/control/kill')">SIGKILL 模拟宕机</button>
+      <button onclick="post('/api/reset')">重置环境</button>
+    </div>
+    <h2 style="margin-top:18px">发布与人工决策</h2>
+    <div class="btns">
+      <button class="primary" onclick="post('/api/releases', {canary_version:'v2', canary_config:'cfg-v2'})">创建灰度发布单</button>
+      <button class="ok-btn" id="btn-continue" onclick="post('/api/decision', {decision:'continue'})">决策：补齐</button>
+      <button class="danger" id="btn-abort" onclick="post('/api/decision', {decision:'abort'})">决策：撤回</button>
+    </div>
+    <p class="muted" style="margin:8px 0 0; font-size:12px">
+      权重阶梯 0→10→25→<b style="color:var(--warn)">50 决策点</b>→75→100；决策写入磁盘文件，控制器重启后仍可读取。</p>
+  </section>
+
+  <!-- 场景演练 -->
+  <section class="card col-8">
+    <h2>一键演练（自动在 50% 时 kill 控制器，再恢复核对）</h2>
+    <div class="btns">
+      <button class="primary" onclick="runScenario('success')">场景 A：断控恢复后【补齐】全量</button>
+      <button class="danger" onclick="runScenario('rollback')">场景 B：恢复后注入故障并【撤回】</button>
+    </div>
+    <div class="scenario-log" id="scenario-log" style="margin-top:10px">
+      <div class="muted">尚未运行演练。演练会自动：重置 → 启控制器 → 建发布单 → 走到 50% → SIGKILL → 重启核对 → 按场景补齐/撤回。</div>
+    </div>
+  </section>
+
+  <!-- 发布阶段机 -->
+  <section class="card col-12">
+    <h2>发布阶段机（控制器调谐状态，持久化于 controller_state.json）</h2>
+    <div class="steps" id="phase-steps"></div>
+    <div id="release-detail" class="muted mono" style="margin-top:10px"></div>
+  </section>
+
+  <!-- 网关 -->
+  <section class="card col-6">
+    <h2>网关路由（实际生效）</h2>
+    <div class="bar" id="weight-bar"></div>
+    <div class="kv" style="margin-top:12px">
+      <div class="k">v2 权重</div><div id="gw-w2" class="mono"></div>
+      <div class="k">v1 权重</div><div id="gw-w1" class="mono"></div>
+      <div class="k">网关配置</div><div id="gw-cfg" class="mono"></div>
+    </div>
+    <h2 style="margin-top:16px">模拟流量（近 60 秒采样）</h2>
+    <div class="traffic-row">
+      <div><span class="muted">v1 RPS</span><br><b id="tr-v1">-</b></div>
+      <div><span class="muted">v2 RPS</span><br><b id="tr-v2">-</b></div>
+      <div><span class="muted">v2 错误 RPS</span><br><b id="tr-err" style="color:var(--bad)">-</b></div>
+      <div><span class="muted">累计请求</span><br><b id="tr-total">-</b></div>
+    </div>
+  </section>
+
+  <!-- 实例与配置 -->
+  <section class="card col-6">
+    <h2>实例池与配置挂载</h2>
+    <div id="instances" style="display:flex; flex-direction:column; gap:10px"></div>
+    <h2 style="margin-top:16px">配置中心</h2>
+    <table><thead><tr><th>版本</th><th>内容</th></tr></thead><tbody id="configs"></tbody></table>
+  </section>
+
+  <!-- 控制器事件：依据 + 实际状态 -->
+  <section class="card col-8">
+    <h2>控制器事件流（每条含：动作依据 / 当时实际状态快照 / 实际动作）</h2>
+    <div class="timeline" id="events"></div>
+  </section>
+
+  <!-- 数据面命令审计 -->
+  <section class="card col-4">
+    <h2>数据面命令审计（幂等跳过可追溯）</h2>
+    <div style="max-height:460px; overflow-y:auto">
+      <table>
+        <thead><tr><th>#</th><th>命令 / 参数 / 依据</th></tr></thead>
+        <tbody id="cmdlog"></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const PHASES = ["ENSURE_V2","ATTACH_CONFIG","SHIFT","GATE","ROLLBACK_SHIFT",
+  "FORWARD_CLEANUP","CLEANUP","DONE"];
+const PHASE_LABEL = {
+  ENSURE_V2:"① 建 v2 实例", ATTACH_CONFIG:"② 挂载新配置", SHIFT:"③ 阶梯加权",
+  GATE:"④ 50% 决策点", ROLLBACK_SHIFT:"⑤ 撤回降权", FORWARD_CLEANUP:"⑥ 清理 v1",
+  CLEANUP:"⑦ 清理 canary", DONE:"✔ 完成"
+};
+let lastScenarioStep = 0;
+
+async function post(path, body) {
+  try {
+    const resp = await fetch(path, {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body || {})});
+    const data = await resp.json();
+    if (!resp.ok) { toast(data.error || "请求失败", true); return null; }
+    toast("操作成功：" + path);
+    refresh();
+    return data;
+  } catch (e) { toast("网络错误：" + e, true); return null; }
+}
+async function runScenario(name) {
+  await post("/api/scenario/run", {name});
+}
+function toast(msg, isErr) {
+  const el = document.createElement("div");
+  el.className = "toast" + (isErr ? " err" : "");
+  el.textContent = msg;
+  document.getElementById("toast").appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+function esc(s) { return String(s).replace(/[&<>]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function jsonView(obj) { return esc(JSON.stringify(obj, null, 1)); }
+
+async function refresh() {
+  let data;
+  try { data = await (await fetch("/api/state")).json(); }
+  catch (e) { return; }
+  document.getElementById("clock").textContent = data.ts;
+  renderController(data);
+  renderRelease(data);
+  renderGateway(data);
+  renderInstances(data);
+  renderConfigs(data);
+  renderEvents(data);
+  renderCmdLog(data);
+  renderScenario(data);
+}
+
+function renderController(data) {
+  const c = data.controller || {};
+  const badge = document.getElementById("ctrl-badge");
+  const alive = !!c.alive;
+  badge.textContent = alive ? `控制器运行中 · pid ${c.pid} · 第 ${c.epoch ?? "-"} 生命周期`
+    : "控制器已停止（数据面仍保持实际状态）";
+  badge.className = "badge " + (alive ? "alive" : "dead");
+  document.getElementById("phase-badge").textContent = "阶段 " + (c.phase || "IDLE");
+  const kv = document.getElementById("ctrl-kv");
+  kv.innerHTML = [
+    ["进程", alive ? `存活 pid=${c.pid}` : "已停止"],
+    ["生命周期 epoch", c.epoch ?? "-"],
+    ["持久化阶段", c.phase ?? "-"],
+    ["步进索引", c.step_index ?? "-"],
+    ["人工决策", c.decision ?? "（未决策）"],
+    ["状态文件年龄", c.heartbeat_age != null ? c.heartbeat_age + " s" : "-"],
+  ].map(([k,v]) => `<div class="k">${esc(k)}</div><div class="mono">${esc(v)}</div>`).join("");
+}
+
+function renderRelease(data) {
+  const rel = data.release;
+  const relBadge = document.getElementById("rel-badge");
+  const phase = data.controller.phase || "IDLE";
+  relBadge.textContent = rel ? `发布单 ${rel.id} · ${rel.status}` : "无发布单";
+  relBadge.className = "badge " + (rel?.status === "IN_PROGRESS" ? "phase"
+    : rel?.status === "SUCCEEDED" ? "ok" : rel?.status === "ROLLED_BACK" ? "bad" : "");
+
+  const stepsEl = document.getElementById("phase-steps");
+  const cur = PHASES.indexOf(phase);
+  stepsEl.innerHTML = PHASES.map((p, i) => {
+    let cls = "step";
+    if (p === phase) cls += " active";
+    else if (i < cur && phase !== "IDLE") cls += " done";
+    if (p === "GATE") cls += "";
+    return `<span class="${cls}">${PHASE_LABEL[p]}</span>`;
+  }).join("");
+
+  document.getElementById("release-detail").textContent = rel
+    ? JSON.stringify({id: rel.id, status: rel.status, decision: rel.decision,
+        spec: rel.spec, created_at: rel.created_at, decided_at: rel.decided_at,
+        finished_at: rel.finished_at}, null, 1)
+    : "无发布单";
+
+  const atGate = phase === "GATE";
+  document.getElementById("btn-continue").disabled = !atGate;
+  document.getElementById("btn-abort").disabled = !atGate;
+}
+
+function renderGateway(data) {
+  const w2 = data.gateway.canary_weight, w1 = 100 - w2;
+  const bar = document.getElementById("weight-bar");
+  bar.innerHTML =
+    `<div class="v1" style="width:${w1}%">v1 ${w1}%</div>` +
+    `<div class="v2" style="width:${w2}%">v2 ${w2}%</div>`;
+  document.getElementById("gw-w2").textContent = w2 + "%";
+  document.getElementById("gw-w1").textContent = w1 + "%";
+  document.getElementById("gw-cfg").textContent = data.gateway.config_version;
+
+  const samples = data.traffic.samples;
+  const last = samples[samples.length - 1];
+  document.getElementById("tr-v1").textContent = last ? last.v1_rps : "-";
+  document.getElementById("tr-v2").textContent = last ? last.v2_rps : "-";
+  document.getElementById("tr-err").textContent = last ? last.v2_error_rps : "-";
+  document.getElementById("tr-total").textContent = data.traffic.counters.total;
+}
+
+function renderInstances(data) {
+  const el = document.getElementById("instances");
+  if (!data.instances.length) { el.innerHTML = '<div class="muted">无实例</div>'; return; }
+  el.innerHTML = data.instances.map(i => {
+    const dot = i.status === "terminated" ? "gray" : i.healthy ? "green" : "red";
+    const running = i.status === "running";
+    return `<div class="inst ${i.status}">
+      <div><span class="dot ${dot}"></span><b class="mono">${esc(i.id)}</b>
+        <span class="badge">${esc(i.version)}</span>
+        <span class="badge ${i.healthy ? "ok" : "bad"}">${running ? (i.healthy ? "健康" : "不健康") : "已终止"}</span>
+        <span class="muted">配置: <b>${esc(i.config_version)}</b></span></div>
+      <div class="btns" style="margin-top:8px">
+        ${running ? `<button class="warn" onclick="post('/api/fault/instances/${encodeURIComponent(i.id)}', {unhealthy:true})">注入故障</button>
+          <button onclick="post('/api/fault/instances/${encodeURIComponent(i.id)}', {unhealthy:false})">恢复健康</button>` : ""}
+      </div></div>`;
+  }).join("");
+}
+
+function renderConfigs(data) {
+  document.getElementById("configs").innerHTML = Object.entries(data.configs)
+    .map(([v, cfg]) => `<tr><td class="mono">${esc(v)}</td><td class="mono">${esc(JSON.stringify(cfg))}</td></tr>`)
+    .join("");
+}
+
+function renderEvents(data) {
+  const events = (data.controller_events || []).slice().reverse();
+  const el = document.getElementById("events");
+  if (!events.length) { el.innerHTML = '<div class="muted">控制器尚未产生事件（启动控制器并创建发布单后出现）。</div>'; return; }
+  el.innerHTML = events.map(ev => `
+    <div class="ev">
+      <div class="head">
+        <span class="etype">${esc(ev.type)}</span>
+        <span class="badge">${esc(ev.phase)}</span>
+        <span class="muted mono">step=${ev.step_index} · epoch=${ev.epoch} · ${esc(ev.ts)}</span>
+      </div>
+      <div>📋 依据：${esc(ev.basis)}</div>
+      <details><summary>实际状态快照与动作</summary>
+        <pre>observed:\n${jsonView(ev.observed)}\naction:\n${jsonView(ev.action)}</pre>
+      </details>
+    </div>`).join("");
+}
+
+function renderCmdLog(data) {
+  const log = (data.command_log || []).slice().reverse();
+  document.getElementById("cmdlog").innerHTML = log.map(c => `
+    <tr><td class="mono muted">${c.seq}</td>
+    <td><span class="mono" style="color:var(--accent)">${esc(c.command)}</span>
+      ${c.skipped ? '<span class="badge skipped">幂等跳过</span>' : ""}
+      <pre>${jsonView(c.params)}</pre>
+      <div class="muted">${esc(c.note || "")}</div>
+      <div class="muted mono">${esc(c.ts)}</div></td></tr>`).join("");
+}
+
+function renderScenario(data) {
+  const sc = data.scenario;
+  const el = document.getElementById("scenario-log");
+  if (!sc) { return; }
+  const steps = sc.steps || [];
+  el.innerHTML = `<div class="line"><b>演练 ${esc(sc.name)} · ${esc(sc.status)}</b>
+    <span class="muted mono">${esc(sc.started_at || "")} → ${esc(sc.finished_at || "进行中")}</span></div>` +
+    steps.map(s => `<div class="line lvl-${esc(s.level)}"><span class="mono muted">${esc(s.ts)}</span> ${esc(s.message)}</div>`).join("");
+  el.scrollTop = el.scrollHeight;
+}
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>
